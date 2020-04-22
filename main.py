@@ -33,6 +33,17 @@ def show_pictures(loader, nb_imgs=0, model=None, batch_size=20):
             ax.imshow(img, cmap='gray')
     plt.show()
 
+def display_losses(losses, save=False):
+    plt.plot(losses['train'], label='Training loss')
+    plt.plot(losses['validation'], label='Validation loss')
+    plt.legend()
+    _ = plt.ylim()
+    if not save:
+        plt.show()
+    else:
+        print("save losses to losses.png")
+        plt.savefig('losses.png')
+        plt.close()
 
 def split_indices_train(train_data, valid_size):
     num_train = len(train_data)
@@ -147,6 +158,7 @@ def train(model, train_loader, valid_loader, n_epochs=50, noise_factor=0.5,
           device="cpu", save_path=None):
 
     min_valid_loss = np.inf
+    losses = {'train':[], 'validation':[]}
 
     for epoch in range(1, n_epochs+1):
         # monitor training loss
@@ -183,6 +195,8 @@ def train(model, train_loader, valid_loader, n_epochs=50, noise_factor=0.5,
         # print avg training statistics
         train_loss = train_loss/len(train_loader.sampler)
         valid_loss = valid_loss/len(valid_loader.sampler)
+        losses['train'].append(train_loss)
+        losses['validation'].append(valid_loss)
         save_model = ""
         if(valid_loss < min_valid_loss and save_path is not None):
             save_model = " (model saved)"
@@ -193,6 +207,8 @@ def train(model, train_loader, valid_loader, n_epochs=50, noise_factor=0.5,
             epoch, train_loss)
             + ' Valid loss {:.6f}: '.format(valid_loss)
             + save_model)
+
+    return losses
 
 
 def test(model, test_loader, device="cpu"):
@@ -229,9 +245,10 @@ if __name__ == '__main__':
     batch_size = 20
 
     data_root_path = "/home/danieauf/Data/iris"
-    train_loader, valid_loader, test_loader = prepare_data(data_root_path, batch_size)
+    train_loader, valid_loader, test_loader = prepare_data(data_root_path,
+                                                           batch_size)
 
-    #show_pictures(train_loader, 10)
+    # show_pictures(train_loader, 10)
 
     model = ConvDenoiser()
     # specify loss function
@@ -244,7 +261,9 @@ if __name__ == '__main__':
 
     if is_cuda:
         model.cuda()
-    #train(model, train_loader, valid_loader, device=dev, save_path=model_path)
+    losses = train(model, train_loader, valid_loader, n_epochs=50, device=dev, save_path=model_path)
+
+    display_losses(losses, True)
 
     model.load_state_dict(torch.load(model_path))
 
