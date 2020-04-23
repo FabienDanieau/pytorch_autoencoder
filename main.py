@@ -1,37 +1,56 @@
 import torch
 import numpy as np
 import os
+import glob
 from torchvision import datasets
 import torchvision.transforms as transforms
 import matplotlib.pyplot as plt
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data.sampler import SubsetRandomSampler
+from PIL import Image, ImageStat
 
 
-def show_pictures(loader, nb_imgs=0, model=None, batch_size=20):
+def reverse_normalization(batch, mean, std):
+    x = batch.new(*batch.size())
+    x[:, 0, :, :] = batch[:, 0, :, :] * std[0] + mean[0]
+    x[:, 1, :, :] = batch[:, 1, :, :] * std[1] + mean[1]
+    x[:, 2, :, :] = batch[:, 2, :, :] * std[2] + mean[2]
+    return x
+
+
+def show_pictures(loader, nb_imgs=0, model=None, batch_size=20,
+                  mean=None, std=None):
     dataiter = iter(loader)
     images, labels = dataiter.next()
 
     if model is not None:
         output = model(images)
-        output = output.view(batch_size, 1, 64, 64)
+        #output = output.view(batch_size, 3, 64, 64)
+        output = reverse_normalization(output, mean, std)
         output = output.detach().numpy()
+
+        images = reverse_normalization(images, mean, std)
+        images = images.numpy()
+
         fig, axes = plt.subplots(nrows=2, ncols=nb_imgs, sharex=True,
                                  sharey=True, figsize=(25, 4))
 
         for imgs, row in zip([images, output], axes):
             for img, ax in zip(imgs, row):
-                img = np.squeeze(img)
-                ax.imshow(img, cmap='gray')
+                img = np.transpose(img, (1, 2, 0))
+                ax.imshow(img)
     else:
+        if mean is not None and std is not None:
+            images = reverse_normalization(images, mean, std)
         images = images.numpy()  # convert images to numpy for display
         fig, axes = plt.subplots(nrows=1, ncols=nb_imgs, sharex=True,
                                  sharey=True, figsize=(25, 4))
         for img, ax in zip(images, axes):
-            img = np.squeeze(img)
-            ax.imshow(img, cmap='gray')
+            img = np.transpose(img, (1, 2, 0))
+            ax.imshow(img)
     plt.show()
+
 
 def display_losses(losses, save=False):
     plt.plot(losses['train'], label='Training loss')
@@ -45,6 +64,28 @@ def display_losses(losses, save=False):
         plt.savefig('losses.png')
         plt.close()
 
+
+def get_mean_and_std(path):
+    print("computing mean and stddev of "+path)
+    image_files = [f for f in glob.glob(os.path.join(path, '*.png'))]
+    print(str(len(image_files)) +" image(s) found.")
+
+    mean = np.zeros(3)
+    stddev = np.zeros(3)
+
+    for filepath in image_files:
+        img = Image.open(filepath)
+        mean += ImageStat.Stat(img).mean
+        stddev += ImageStat.Stat(img).stddev
+
+    mean /= len(image_files)
+    stddev /= len(image_files)
+    mean /= 255.0
+    stddev /= 255.0
+
+    return mean, stddev
+
+
 def split_indices_train(train_data, valid_size):
     num_train = len(train_data)
     indices = list(range(num_train))
@@ -54,19 +95,20 @@ def split_indices_train(train_data, valid_size):
     return train_idx, valid_idx
 
 
-def prepare_data(data_root_path, batch_size, valid_size=0.2):
+def prepare_data(data_root_path, batch_size, valid_size, 
+                 mean, std):
 
     transform = transforms.Compose([
-        transforms.Grayscale(),
         transforms.Resize((64, 64)),
         transforms.RandomRotation(10),
         transforms.ToTensor(),
+        transforms.Normalize(mean, std)
     ])
 
     transformtest = transforms.Compose([
-        transforms.Grayscale(),
         transforms.Resize((64, 64)),
         transforms.ToTensor(),
+        transforms.Normalize(mean, std)
     ])
 
     # load the training and test datasets
@@ -104,7 +146,7 @@ class ConvDenoiser(nn.Module):
         super(ConvDenoiser, self).__init__()
         # encoder layers #
         # conv layer (depth from 1 --> 32), 3x3 kernels
-        self.conv1 = nn.Conv2d(1, 32, 3, padding=1)
+        self.conv1 = nn.Conv2d(3, 32, 3, padding=1)
         # conv layer (depth from 32 --> 16), 3x3 kernels
         self.conv2 = nn.Conv2d(32, 16, 3, padding=1)
         # conv layer (depth from 16 --> 8), 3x3 kernels
@@ -120,7 +162,7 @@ class ConvDenoiser(nn.Module):
         self.t_conv2 = nn.ConvTranspose2d(8, 16, 2, stride=2)
         self.t_conv3 = nn.ConvTranspose2d(16, 32, 2, stride=2)
         # one, final, normal conv layer to decrease the depth
-        self.conv_out = nn.Conv2d(32, 1, 3, padding=1)
+        self.conv_out = nn.Conv2d(32, 3, 3, padding=1)
 
         # self.dropout = nn.Dropout(0.2)
 
@@ -158,14 +200,14 @@ def train(model, train_loader, valid_loader, n_epochs=50, noise_factor=0.5,
           device="cpu", save_path=None):
 
     min_valid_loss = np.inf
-    losses = {'train':[], 'validation':[]}
+    losses = {'train': [], 'validation': []}
 
     for epoch in range(1, n_epochs+1):
         # monitor training loss
         train_loss = 0.0
         valid_loss = 0.0
 
-        model.train() 
+        model.train()
         for data in train_loader:
             images, _ = data
                         
@@ -173,9 +215,10 @@ def train(model, train_loader, valid_loader, n_epochs=50, noise_factor=0.5,
             optimizer.zero_grad()
             images = images.to(device)
             outputs = model(images)
-            # calculate the loss     
+            # calculate the loss
             loss = criterion(outputs, images)
-            # backward pass: compute gradient of the loss with respect to model parameters
+            # backward pass: compute gradient of the loss with respect to
+            #  model parameters
             loss.backward()
             # perform a single optimization step (parameter update)
             optimizer.step()
@@ -184,12 +227,13 @@ def train(model, train_loader, valid_loader, n_epochs=50, noise_factor=0.5,
             
         model.eval()  # prep model for evaluation
         for images, _ in valid_loader:
-            # forward pass: compute predicted outputs by passing inputs to the model
+            # forward pass: compute predicted outputs by passing
+            # inputs to the model
             images = images.to(device)
             output = model(images)
             #  calculate the loss
             loss = criterion(output, images)
-            # update running validation loss 
+            # update running validation loss
             valid_loss += loss.item()*images.size(0)
         
         # print avg training statistics
@@ -245,10 +289,24 @@ if __name__ == '__main__':
     batch_size = 20
 
     data_root_path = "/home/danieauf/Data/iris"
-    train_loader, valid_loader, test_loader = prepare_data(data_root_path,
-                                                           batch_size)
 
-    # show_pictures(train_loader, 10)
+    # m, s = get_mean_and_std(os.path.join(data_root_path, 'data_test/test'))
+    # print(m, s)
+    mean_test = (0.38698485, 0.28999359, 0.20289349)
+    std_test = (0.31539622, 0.26247943, 0.20613219)
+
+    # m, s = get_mean_and_std(os.path.join(data_root_path, 'data_train/train'))
+    # print(m, s)
+    mean_train = (0.36651049, 0.24841637, 0.16446467)
+    std_train = (0.30748653, 0.24475968, 0.1933519)
+
+    train_loader, valid_loader, test_loader = prepare_data(data_root_path,
+                                                           batch_size,
+                                                           0.2,
+                                                           mean_train,
+                                                           std_train)
+
+    show_pictures(train_loader, 10, mean=mean_train, std=std_train)
 
     model = ConvDenoiser()
     # specify loss function
@@ -260,7 +318,7 @@ if __name__ == '__main__':
     model_path = "trained_model.pt"
 
     if is_cuda:
-        model.cuda()
+       model.cuda()
     losses = train(model, train_loader, valid_loader, n_epochs=50, device=dev, save_path=model_path)
 
     display_losses(losses, True)
@@ -274,4 +332,4 @@ if __name__ == '__main__':
     if(is_cuda):
         model.cpu()
 
-    show_pictures(test_loader, 10, model, batch_size)
+    show_pictures(test_loader, 10, model, batch_size, mean_train, std_train)
