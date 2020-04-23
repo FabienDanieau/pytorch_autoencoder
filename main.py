@@ -68,7 +68,7 @@ def display_losses(losses, save=False):
 def get_mean_and_std(path):
     print("computing mean and stddev of "+path)
     image_files = [f for f in glob.glob(os.path.join(path, '*.png'))]
-    print(str(len(image_files)) +" image(s) found.")
+    print(str(len(image_files)) + " image(s) found.")
 
     mean = np.zeros(3)
     stddev = np.zeros(3)
@@ -146,9 +146,9 @@ class ConvDenoiser(nn.Module):
         super(ConvDenoiser, self).__init__()
         # encoder layers #
         # conv layer (depth from 1 --> 32), 3x3 kernels
-        self.conv1 = nn.Conv2d(3, 32, 3, padding=1)
+        self.conv1 = nn.Conv2d(3, 64, 3, padding=1)
         # conv layer (depth from 32 --> 16), 3x3 kernels
-        self.conv2 = nn.Conv2d(32, 16, 3, padding=1)
+        self.conv2 = nn.Conv2d(64, 16, 3, padding=1)
         # conv layer (depth from 16 --> 8), 3x3 kernels
         self.conv3 = nn.Conv2d(16, 8, 3, padding=1)
         # pooling layer to reduce x-y dims by two; kernel and stride of 2
@@ -160,9 +160,9 @@ class ConvDenoiser(nn.Module):
         self.t_conv1 = nn.ConvTranspose2d(8, 8, 2, stride=2)
         # two more transpose layers with a kernel of 2
         self.t_conv2 = nn.ConvTranspose2d(8, 16, 2, stride=2)
-        self.t_conv3 = nn.ConvTranspose2d(16, 32, 2, stride=2)
+        self.t_conv3 = nn.ConvTranspose2d(16, 64, 2, stride=2)
         # one, final, normal conv layer to decrease the depth
-        self.conv_out = nn.Conv2d(32, 3, 3, padding=1)
+        self.conv_out = nn.Conv2d(64, 3, 3, padding=1)
 
         # self.dropout = nn.Dropout(0.2)
 
@@ -258,7 +258,7 @@ def train(model, train_loader, valid_loader, n_epochs=50, noise_factor=0.5,
 def test(model, test_loader, device="cpu"):
     test_loss = 0.0
     model.eval()  # prep model for evaluation
-    for images, _ in valid_loader:
+    for images, _ in test_loader:
         # forward pass: compute predicted outputs by passing inputs to the model
         images = images.to(device)
         output = model(images)
@@ -286,7 +286,7 @@ if __name__ == '__main__':
         print("cuda is not available")
 
     # how many samples per batch to load
-    batch_size = 20
+    batch_size = 10
 
     data_root_path = "/home/danieauf/Data/iris"
 
@@ -300,9 +300,10 @@ if __name__ == '__main__':
     mean_train = (0.36651049, 0.24841637, 0.16446467)
     std_train = (0.30748653, 0.24475968, 0.1933519)
 
+
     train_loader, valid_loader, test_loader = prepare_data(data_root_path,
                                                            batch_size,
-                                                           0.2,
+                                                           0.4,
                                                            mean_train,
                                                            std_train)
 
@@ -317,11 +318,11 @@ if __name__ == '__main__':
 
     model_path = "trained_model.pt"
 
-    if is_cuda:
-       model.cuda()
-    losses = train(model, train_loader, valid_loader, n_epochs=50, device=dev, save_path=model_path)
+    # if is_cuda:
+    #    model.cuda()
+    #losses = train(model, train_loader, valid_loader, n_epochs=50, device=dev, save_path=model_path)
 
-    display_losses(losses, True)
+    # display_losses(losses, True)
 
     model.load_state_dict(torch.load(model_path))
 
