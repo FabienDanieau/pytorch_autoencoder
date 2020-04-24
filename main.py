@@ -255,10 +255,13 @@ def train(model, train_loader, valid_loader, n_epochs=50, noise_factor=0.5,
         for images, _ in valid_loader:
             # forward pass: compute predicted outputs by passing
             # inputs to the model
+            noisy_images = batch_transform(images, transform)
+            noisy_images = noisy_images.to(device)
+            outputs = model(noisy_images)
+
             images = images.to(device)
-            output = model(images)
             #  calculate the loss
-            loss = criterion(output, images)
+            loss = criterion(outputs, images)
             # update running validation loss
             valid_loss += loss.item()*images.size(0)
 
@@ -271,7 +274,7 @@ def train(model, train_loader, valid_loader, n_epochs=50, noise_factor=0.5,
         if(valid_loss < min_valid_loss and save_path is not None):
             save_model = " (model saved)"
             torch.save(model.state_dict(), save_path)
-            min_valid_loss = train_loss
+            min_valid_loss = valid_loss
 
         print('Epoch: {} \tTraining Loss: {:.6f}'.format(
             epoch, train_loss)
