@@ -6,9 +6,9 @@ from torchvision import datasets
 import torchvision.transforms as transforms
 import matplotlib.pyplot as plt
 import torch.nn as nn
-import torch.nn.functional as F
 from torch.utils.data.sampler import SubsetRandomSampler
 from PIL import Image, ImageStat, ImageDraw
+from ConvDenoiser import ConvDenoiser
 
 
 def reverse_normalization(batch, mean, std):
@@ -110,14 +110,14 @@ def prepare_data(data_root_path, batch_size, valid_size,
                  mean, std):
 
     transform = transforms.Compose([
-        transforms.Resize((64, 64)),
+        transforms.Resize(ConvDenoiser.INPUT_SIZE),
         transforms.RandomRotation(10),
         transforms.ToTensor(),
         # transforms.Normalize(mean, std)
     ])
 
     transformtest = transforms.Compose([
-        transforms.Resize((64, 64)),
+        transforms.Resize(ConvDenoiser.INPUT_SIZE),
         transforms.ToTensor(),
         # transforms.Normalize(mean, std)
     ])
@@ -152,61 +152,6 @@ def prepare_data(data_root_path, batch_size, valid_size,
     return train_loader, valid_loader, test_loader
 
 
-class ConvDenoiser(nn.Module):
-    def __init__(self):
-        super(ConvDenoiser, self).__init__()
-        # encoder layers #
-        # conv layer (depth from 1 --> 32), 3x3 kernels
-        self.conv1 = nn.Conv2d(3, 64, 3, padding=1)
-        # conv layer (depth from 32 --> 16), 3x3 kernels
-        self.conv2 = nn.Conv2d(64, 16, 3, padding=1)
-        # conv layer (depth from 16 --> 8), 3x3 kernels
-        self.conv3 = nn.Conv2d(16, 8, 3, padding=1)
-        # pooling layer to reduce x-y dims by two; kernel and stride of 2
-        self.pool = nn.MaxPool2d(2, 2)
-
-        # decoder layers #
-        # transpose layer, a kernel of 2 and a stride of 2
-        # will increase the spatial dims by 2
-        self.t_conv1 = nn.ConvTranspose2d(8, 8, 2, stride=2)
-        # two more transpose layers with a kernel of 2
-        self.t_conv2 = nn.ConvTranspose2d(8, 16, 2, stride=2)
-        self.t_conv3 = nn.ConvTranspose2d(16, 64, 2, stride=2)
-        # one, final, normal conv layer to decrease the depth
-        self.conv_out = nn.Conv2d(64, 3, 3, padding=1)
-
-        # self.dropout = nn.Dropout(0.2)
-
-    def forward(self, x):
-        # encode #
-        # add hidden layers with relu activation function
-        # and maxpooling after
-        x = F.relu(self.conv1(x))
-        x = self.pool(x)
-        # x = self.dropout(x)
-        # add second hidden layer
-        x = F.relu(self.conv2(x))
-        x = self.pool(x)
-        # x = self.dropout(x)
-        # add third hidden layer
-        x = F.relu(self.conv3(x))
-        x = self.pool(x)  # compressed representation
-        # x = self.dropout(x)
-
-        # decode #
-        # add transpose conv layers, with relu activation function
-        x = F.relu(self.t_conv1(x))
-        # x = self.dropout(x)
-        x = F.relu(self.t_conv2(x))
-        # x = self.dropout(x)
-        x = F.relu(self.t_conv3(x))
-        # x = self.dropout(x)
-        # transpose again, output should have a sigmoid applied
-        x = torch.sigmoid(self.conv_out(x))
-
-        return x
-
-
 def batch_transform(batch, transform):
     new_batch = batch.new(*batch.size())
     for i in range(len(batch)):
@@ -237,7 +182,6 @@ def train(model, train_loader, valid_loader, n_epochs=50, noise_factor=0.5,
             # clear the gradients of all optimized variables
             optimizer.zero_grad()
             noisy_images = batch_transform(images, transform)
-
             noisy_images = noisy_images.to(device)
             outputs = model(noisy_images)
             # calculate the loss
