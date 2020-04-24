@@ -8,7 +8,7 @@ import matplotlib.pyplot as plt
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data.sampler import SubsetRandomSampler
-from PIL import Image, ImageStat
+from PIL import Image, ImageStat, ImageDraw
 
 
 def reverse_normalization(batch, mean, std):
@@ -19,31 +19,42 @@ def reverse_normalization(batch, mean, std):
     return x
 
 
+def add_noise_to_images(list_im):
+    for im in list_im:
+        im = np.transpose(im, (1, 2, 0))
+        im = Image.fromarray((im * 255).astype(np.uint8))
+        draw = ImageDraw.Draw(im)
+        draw.line((0, 0) + im.size, fill=128)
+        draw.line((0, im.size[1], im.size[0], 0), fill=128)
+
+
 def show_pictures(loader, nb_imgs=0, model=None, batch_size=20,
                   mean=None, std=None):
     dataiter = iter(loader)
     images, labels = dataiter.next()
 
     if model is not None:
-        output = model(images)
-        #output = output.view(batch_size, 3, 64, 64)
-        output = reverse_normalization(output, mean, std)
+        transform = transforms.Compose([transforms.RandomErasing(p=1)])
+        noisy_images = batch_transform(images, transform)
+        output = model(noisy_images)
+
+        # output = reverse_normalization(output, mean, std)
         output = output.detach().numpy()
 
-        images = reverse_normalization(images, mean, std)
-        images = images.numpy()
+        # images = reverse_normalization(images, mean, std)
+        noisy_images = noisy_images.detach().numpy()
 
         fig, axes = plt.subplots(nrows=2, ncols=nb_imgs, sharex=True,
                                  sharey=True, figsize=(25, 4))
 
-        for imgs, row in zip([images, output], axes):
+        for imgs, row in zip([noisy_images, output], axes):
             for img, ax in zip(imgs, row):
                 img = np.transpose(img, (1, 2, 0))
                 ax.imshow(img)
     else:
-        if mean is not None and std is not None:
-            images = reverse_normalization(images, mean, std)
-        images = images.numpy()  # convert images to numpy for display
+        # if mean is not None and std is not None:
+        #    images = reverse_normalization(images, mean, std)
+        images = images.detach().numpy()  # convert images to numpy for display
         fig, axes = plt.subplots(nrows=1, ncols=nb_imgs, sharex=True,
                                  sharey=True, figsize=(25, 4))
         for img, ax in zip(images, axes):
@@ -95,20 +106,20 @@ def split_indices_train(train_data, valid_size):
     return train_idx, valid_idx
 
 
-def prepare_data(data_root_path, batch_size, valid_size, 
+def prepare_data(data_root_path, batch_size, valid_size,
                  mean, std):
 
     transform = transforms.Compose([
         transforms.Resize((64, 64)),
         transforms.RandomRotation(10),
         transforms.ToTensor(),
-        transforms.Normalize(mean, std)
+        # transforms.Normalize(mean, std)
     ])
 
     transformtest = transforms.Compose([
         transforms.Resize((64, 64)),
         transforms.ToTensor(),
-        transforms.Normalize(mean, std)
+        # transforms.Normalize(mean, std)
     ])
 
     # load the training and test datasets
@@ -192,8 +203,15 @@ class ConvDenoiser(nn.Module):
         # x = self.dropout(x)
         # transpose again, output should have a sigmoid applied
         x = torch.sigmoid(self.conv_out(x))
-      
+
         return x
+
+
+def batch_transform(batch, transform):
+    new_batch = batch.new(*batch.size())
+    for i in range(len(batch)):
+        new_batch[i] = transform(batch[i])
+    return new_batch
 
 
 def train(model, train_loader, valid_loader, n_epochs=50, noise_factor=0.5,
@@ -201,6 +219,11 @@ def train(model, train_loader, valid_loader, n_epochs=50, noise_factor=0.5,
 
     min_valid_loss = np.inf
     losses = {'train': [], 'validation': []}
+
+    # add noise to image
+    transform = transforms.Compose([
+        transforms.RandomErasing()
+    ])
 
     for epoch in range(1, n_epochs+1):
         # monitor training loss
@@ -210,12 +233,15 @@ def train(model, train_loader, valid_loader, n_epochs=50, noise_factor=0.5,
         model.train()
         for data in train_loader:
             images, _ = data
-                        
+
             # clear the gradients of all optimized variables
             optimizer.zero_grad()
-            images = images.to(device)
-            outputs = model(images)
+            noisy_images = batch_transform(images, transform)
+
+            noisy_images = noisy_images.to(device)
+            outputs = model(noisy_images)
             # calculate the loss
+            images = images.to(device)
             loss = criterion(outputs, images)
             # backward pass: compute gradient of the loss with respect to
             #  model parameters
@@ -224,7 +250,7 @@ def train(model, train_loader, valid_loader, n_epochs=50, noise_factor=0.5,
             optimizer.step()
             # update running training loss
             train_loss += loss.item()*images.size(0)
-            
+
         model.eval()  # prep model for evaluation
         for images, _ in valid_loader:
             # forward pass: compute predicted outputs by passing
@@ -235,7 +261,7 @@ def train(model, train_loader, valid_loader, n_epochs=50, noise_factor=0.5,
             loss = criterion(output, images)
             # update running validation loss
             valid_loss += loss.item()*images.size(0)
-        
+
         # print avg training statistics
         train_loss = train_loss/len(train_loader.sampler)
         valid_loss = valid_loss/len(valid_loader.sampler)
@@ -257,14 +283,23 @@ def train(model, train_loader, valid_loader, n_epochs=50, noise_factor=0.5,
 
 def test(model, test_loader, device="cpu"):
     test_loss = 0.0
+
+    # add noise to image
+    transform = transforms.Compose([
+        transforms.RandomErasing()
+    ])
+
     model.eval()  # prep model for evaluation
     for images, _ in test_loader:
-        # forward pass: compute predicted outputs by passing inputs to the model
-        images = images.to(device)
-        output = model(images)
+        # forward pass: compute predicted outputs by passing inputs
+        #  to the model
+        noisy_images = batch_transform(images, transform)
+        noisy_images = noisy_images.to(device)
+        output = model(noisy_images)
         #  calculate the loss
+        images = images.to(device)
         loss = criterion(output, images)
-        # update running test loss 
+        # update running test loss
         test_loss += loss.item()*images.size(0)
 
     # calculate and print avg test loss
@@ -300,14 +335,13 @@ if __name__ == '__main__':
     mean_train = (0.36651049, 0.24841637, 0.16446467)
     std_train = (0.30748653, 0.24475968, 0.1933519)
 
-
     train_loader, valid_loader, test_loader = prepare_data(data_root_path,
                                                            batch_size,
                                                            0.4,
                                                            mean_train,
                                                            std_train)
 
-    show_pictures(train_loader, 10, mean=mean_train, std=std_train)
+    #show_pictures(train_loader, 10, mean=mean_train, std=std_train)
 
     model = ConvDenoiser()
     # specify loss function
@@ -318,11 +352,12 @@ if __name__ == '__main__':
 
     model_path = "trained_model.pt"
 
-    # if is_cuda:
-    #    model.cuda()
-    #losses = train(model, train_loader, valid_loader, n_epochs=50, device=dev, save_path=model_path)
+    if is_cuda:
+        model.cuda()
+    losses = train(model, train_loader, valid_loader, n_epochs=20, device=dev,
+                   save_path=model_path)
 
-    # display_losses(losses, True)
+    display_losses(losses, True)
 
     model.load_state_dict(torch.load(model_path))
 
